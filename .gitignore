@@ -1,0 +1,29 @@
+# Arduino / ESP32 build artifacts
+*.elf
+*.bin
+*.hex
+*.eep
+*.lst
+*.map
+*.sym
+*.lss
+
+# Compiled files
+*.o
+*.a
+*.so
+*.dll
+
+# IDE specific
+.vscode/
+*.code-workspace
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Backup files
+*.bak
+*.tmp
+*~
