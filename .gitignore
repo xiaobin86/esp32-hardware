@@ -27,3 +27,9 @@ desktop.ini
 *.bak
 *.tmp
 *~
+
+# WiFi credentials (contains sensitive info)
+config.h
+
+# Arduino libraries (managed by IDE, not source control)
+libraries/
