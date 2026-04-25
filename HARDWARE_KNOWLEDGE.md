@@ -1,4 +1,4 @@
-# 硬件知识库
+﻿# 硬件知识库
 
 > 基于我的实际硬件（ESP32-S3-DevKitC-1 + ST7789V 10Pin 带字库屏 + MAX98357A + 喇叭 + GY-91 + INMP441）的接线知识、代码示例和常见问题。
 
@@ -91,6 +91,7 @@ uint32_t getHanziAddr(uint8_t h, uint8_t l) {
 | 方向不对 | Rotation 设置 | 改 `tft.setRotation(1/2/3)` |
 | 串口显示字库失败 | CS2 或 FSO 接错 | 检查 IO9（CS2）和 IO13（FSO）接线 |
 | 汉字显示乱码 | 文件编码不是 GB2312 | VS Code 重新以 GB2312 编码保存 |
+| **字库读取后屏幕颜色反色丢失** | **ST7789 对 SCK 跳变敏感，CS 拉高后仍被干扰** | **SCK 加 10K 下拉电阻；或每次读字库后 `tft.invertDisplay(true)`** |
 
 ---
 
@@ -332,3 +333,5 @@ void i2s_init_duplex() {
 
 *基于 `esp32-hardware` 技术文档整理*
 *官方引脚已验证：2025-04-23*
+
+
