@@ -150,23 +150,23 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   //init wifi
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  // WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   Serial.println("connect...");
   // 等待连接，最多尝试20秒
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi 连接成功！");
-    Serial.print("IP 地址: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\n❌ WiFi 连接失败，请检查名称和密码");
-  }
+  // int attempts = 0;
+  // while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+  //   delay(500);
+  //   Serial.print(".");
+  //   attempts++;
+  // }
+  // if (WiFi.status() == WL_CONNECTED) {
+  //   Serial.println("\n✅ WiFi 连接成功！");
+  //   Serial.print("IP 地址: ");
+  //   Serial.println(WiFi.localIP());
+  // } else {
+  //   Serial.println("\n❌ WiFi 连接失败，请检查名称和密码");
+  // }
   
   
   
