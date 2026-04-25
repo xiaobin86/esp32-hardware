@@ -1,120 +1,121 @@
+// ============================================
+// ST7789 汉字显示 - 修复绘制版本
+// ============================================
+// 改用批量绘制：setAddrWindow + pushColor
+// 避免 drawPixel 的 SPI 事务开销
+// ============================================
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
-
-// ── 针脚定义 ──────────────────────────────────
 #define TFT_CS    10
 #define TFT_DC     6
 #define TFT_RST    7
 #define TFT_MOSI  11
 #define TFT_SCLK  12
-#define TFT_MISO  14   // FSO 接 J1-20
 #define TFT_BL     5
 #define FONT_CS    9
-
+#define FONT_MISO 13
+#define C_BLACK   0x0000
+#define C_WHITE   0xFFFF
+#define C_RED     0xF800
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
-// ── 字库读取 ──────────────────────────────────
-void fontChipRead(uint32_t addr, uint8_t* buf, uint16_t len) {
-  SPI.beginTransaction(SPISettings(8000000, MSBFIRST, SPI_MODE0));
+uint8_t fontBuf[32];  // 单个汉字缓冲区
+// ========== 软件SPI ==========
+void softSPI_WriteByte(uint8_t dat) {
+  for (int i = 0; i < 8; i++) {
+    digitalWrite(TFT_SCLK, LOW);
+    digitalWrite(TFT_MOSI, (dat & 0x80) ? HIGH : LOW);
+    digitalWrite(TFT_SCLK, HIGH);
+    dat <<= 1;
+  }
+}
+uint8_t softSPI_ReadByte() {
+  uint8_t ret = 0;
+  for (int i = 0; i < 8; i++) {
+    digitalWrite(TFT_SCLK, LOW);
+    ret <<= 1;
+    if (digitalRead(FONT_MISO)) ret |= 0x01;
+    digitalWrite(TFT_SCLK, HIGH);
+  }
+  return ret;
+}
+void readFont(uint32_t addr, uint8_t* buf) {
+  digitalWrite(TFT_CS, HIGH);
+  delayMicroseconds(50);
   digitalWrite(FONT_CS, LOW);
-
-  SPI.transfer(0x03);
-  SPI.transfer((addr >> 16) & 0xFF);
-  SPI.transfer((addr >>  8) & 0xFF);
-  SPI.transfer( addr        & 0xFF);
-
-  for (uint16_t i = 0; i < len; i++) {
-    buf[i] = SPI.transfer(0x00);
-  }
-
+  delayMicroseconds(50);
+  
+  softSPI_WriteByte(0x03);
+  softSPI_WriteByte((addr >> 16) & 0xFF);
+  softSPI_WriteByte((addr >>  8) & 0xFF);
+  softSPI_WriteByte( addr        & 0xFF);
+  
+  for (int i = 0; i < 32; i++) buf[i] = softSPI_ReadByte();
+  
   digitalWrite(FONT_CS, HIGH);
-  SPI.endTransaction();
+  delayMicroseconds(50);
 }
-
-// ── GB2312 地址计算 ───────────────────────────
-uint32_t getHanziAddr(uint8_t h, uint8_t l) {
-  uint8_t  qu  = h - 0xA0;
-  uint8_t  wei = l - 0xA0;
-  return 0x2C9D0 + ((uint32_t)(qu - 1) * 94 + (wei - 1)) * 32;
-}
-
-// ── 绘制单个 16×16 汉字 ───────────────────────
-void drawHanzi(int16_t x, int16_t y,
-               const uint8_t* gb,
-               uint16_t fg, uint16_t bg) {
-  uint8_t buf[32];
-  fontChipRead(getHanziAddr(gb[0], gb[1]), buf, 32);
-
+// ========== 批量绘制汉字（修复版）==========
+// 使用 setAddrWindow + pushColor 一次性发送 256 像素
+void drawHanziFast(int16_t x, int16_t y, uint16_t fg, uint16_t bg, uint8_t* buf) {
+  // 设置 16x16 的绘制窗口
+  tft.startWrite();
+  tft.setAddrWindow(x, y, 16, 16);
+  
+  // 一次性发送所有像素颜色
   for (uint8_t row = 0; row < 16; row++) {
-    uint16_t bits = ((uint16_t)buf[row * 2] << 8) | buf[row * 2 + 1];
-    for (uint8_t col = 0; col < 16; col++) {
-      tft.drawPixel(x + col, y + row,
-                    (bits & (0x8000 >> col)) ? fg : bg);
+    uint8_t left  = buf[row * 2];
+    uint8_t right = buf[row * 2 + 1];
+    
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      tft.pushColor((left & (0x80 >> bit)) ? fg : bg);
+    }
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      tft.pushColor((right & (0x80 >> bit)) ? fg : bg);
     }
   }
+  
+  tft.endWrite();
 }
-
-// ── 绘制 GB2312 字符串 ────────────────────────
-void drawChinese(int16_t x, int16_t y,
-                 const char* str,
-                 uint16_t fg, uint16_t bg) {
-  int16_t cx = x;
-  while (*str) {
-    uint8_t ch = (uint8_t)*str;
-    if (ch >= 0xA1 && *(str + 1)) {
-      uint8_t gb[2] = { ch, (uint8_t)*(str + 1) };
-      drawHanzi(cx, y, gb, fg, bg);
-      cx  += 16;
-      str += 2;
-    } else {
-      tft.drawChar(cx, y + 2, ch, fg, bg, 2);
-      cx  += 12;
-      str += 1;
-    }
-  }
-}
-
-// ── 字库自检 ──────────────────────────────────
-bool testFont() {
-  uint8_t buf[4];
-  fontChipRead(getHanziAddr(0xD6, 0xD0), buf, 4);
-  Serial.printf("[字库] %02X %02X %02X %02X\n",
-                buf[0], buf[1], buf[2], buf[3]);
-  bool ok = (buf[0] != 0x00 && buf[0] != 0xFF);
-  Serial.println(ok ? "[字库] OK" : "[字库] 失败，检查CS2/FSO");
-  return ok;
-}
-
-// ── setup ─────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-
-  pinMode(TFT_BL,  OUTPUT); digitalWrite(TFT_BL,  HIGH);
+  delay(1000);
+  
+  // ---------- 阶段1：读取字库 ----------
+  pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, HIGH);
   pinMode(FONT_CS, OUTPUT); digitalWrite(FONT_CS, HIGH);
-
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI);  // CLK, MISO, MOSI
-
+  pinMode(FONT_MISO, INPUT);
+  pinMode(TFT_SCLK, OUTPUT);
+  pinMode(TFT_MOSI, OUTPUT);
+  digitalWrite(TFT_SCLK, LOW);
+  digitalWrite(TFT_MOSI, LOW);
+  
+  // 读取"你" (0xC4E3)
+  uint32_t addr = ((0xC4 - 0xB0) * 94 + (0xE3 - 0xA1) + 846) * 32 + 0x2C9D0;
+  readFont(addr, fontBuf);
+  
+  Serial.println("Font read done");
+  
+  // ---------- 阶段2：初始化屏幕 ----------
+  pinMode(TFT_SCLK, INPUT);
+  pinMode(TFT_MOSI, INPUT);
+  
   tft.init(240, 240);
   tft.setRotation(0);
-  tft.fillScreen(ST77XX_BLACK);
-
-  if (!testFont()) {
-    tft.setTextColor(ST77XX_RED);
-    tft.setTextSize(2);
-    tft.setCursor(10, 100);
-    tft.println("Font Error!");
-    tft.setTextSize(1);
-    tft.setCursor(10, 130);
-    tft.println("Check CS2(IO9)/FSO(IO14)");
-    return;
-  }
-
-  // ?? 文件必须以 GB2312 编码保存
-  drawChinese(4,  20, "你好世界",   0xFFFF, 0x0000);
-  drawChinese(4,  44, "中文显示",   0x07FF, 0x0000);
-  drawChinese(4,  68, "乐鑫ESP32",  0xFFE0, 0x0000);
-  drawChinese(4,  92, "字库测试OK", 0x07E0, 0x0000);
+  tft.fillScreen(C_BLACK);
+  
+  Serial.println("Screen init done");
+  
+  // ---------- 阶段3：批量绘制 ----------
+  // 方法1：批量绘制（推荐）
+  drawHanziFast(50, 50, C_WHITE, C_BLACK, fontBuf);
+  Serial.println("Hanzi drawn with batch method");
+  
+  // 标注
+  tft.setTextColor(C_GREEN);
+  tft.setCursor(10, 100);
+  tft.print("Batch draw test");
 }
-
-void loop() {}
+void loop() {
+  delay(1000);
+}

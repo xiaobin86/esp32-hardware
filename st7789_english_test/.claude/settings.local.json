@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(ino|h\\)$\")",
+      "Read(//d/QLDownload/中景园ZJY154S10Z0TG01技术资料/中景园ZJY154S10Z0TG01技术资料/**)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -u -c ' *)"
+    ]
+  }
+}
