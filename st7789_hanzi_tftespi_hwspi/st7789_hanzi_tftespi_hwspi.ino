@@ -6,10 +6,10 @@
 //   屏幕 CS=GPIO10，字库 CS=GPIO9
 //   每次操作通过 SPI.beginTransaction 切换设备参数
 //
-// 与 Adafruit 硬件SPI版的区别：
-//   - TFT_eSPI 性能更高（支持 DMA、批量传输优化）
-//   - pushImage 比 drawRGBBitmap 更快
-//   - 库内部已处理好 SPI 事务，代码更简洁
+// 关键修复：
+//   1. pixBuf 必须 4 字节对齐（ESP32 DMA 要求）
+//   2. 去掉 USE_HSPI_PORT，确保 TFT_eSPI 和字库都用 FSPI
+//   3. SPI.begin() 先于 tft.init()，确保 MISO 配置正确
 // ============================================================
 
 #include <TFT_eSPI.h>
@@ -24,7 +24,7 @@ TFT_eSPI tft = TFT_eSPI();
 
 // ── 字库点阵缓冲 ────────────────────────────────────────────
 static uint8_t  fontBuf[32];
-// pushPixels 要求数据缓冲区 4 字节对齐（ESP32 32-bit 访问要求）
+// ⚠️ 关键：pushPixels 要求 4 字节对齐（ESP32 DMA 32-bit 访问要求）
 static uint16_t pixBuf[16 * 16] __attribute__((aligned(4)));
 
 // ── GT30L32S4W 地址计算 ─────────────────────────────────────
@@ -37,9 +37,9 @@ uint32_t gb2312Addr(uint8_t msb, uint8_t lsb) {
 }
 
 // ── 从字库读取 32 字节（硬件 SPI）────────────────────────────
-// 关键：与 TFT_eSPI 共享 SPI 总线，通过 beginTransaction 切换
+// 与 TFT_eSPI 共享 SPI 总线，通过 beginTransaction 切换
 bool fontRead(uint32_t addr) {
-  // 防御性确保屏幕 CS 为高（TFT_eSPI 操作后通常是高，但这里保险）
+  // 防御性拉高屏幕 CS（确保屏幕不参与字库通信）
   digitalWrite(TFT_CS, HIGH);
 
   // 将 SPI 外设配置为字库参数（8MHz, MODE0）
@@ -57,14 +57,14 @@ bool fontRead(uint32_t addr) {
   }
 
   digitalWrite(FONT_CS, HIGH);
-  SPI.endTransaction();  // 释放 SPI 总线，恢复默认状态
+  SPI.endTransaction();  // 释放 SPI 总线
 
   // 全零检测：正常汉字点阵不会全零
   for (int i = 0; i < 32; i++) if (fontBuf[i]) return true;
   return false;
 }
 
-  // ── 绘制单个汉字 ─────────────────────────────────────────────
+// ── 绘制单个汉字 ─────────────────────────────────────────────
 void drawHanzi(int16_t x, int16_t y, uint8_t msb, uint8_t lsb,
                uint16_t fg, uint16_t bg) {
   uint32_t addr = gb2312Addr(msb, lsb);
@@ -80,21 +80,9 @@ void drawHanzi(int16_t x, int16_t y, uint8_t msb, uint8_t lsb,
     }
   }
 
-  // pushImage：内部已自动处理 SPI 事务（begin_tft_write/end_tft_write）
+  // pushImage 内部自动处理 SPI 事务（begin_tft_write/end_tft_write）
   // 不需要外部包裹 startWrite/endWrite
   tft.pushImage(x, y, 16, 16, pixBuf);
-}
-
-// ── 备选：逐点绘制（兼容性最好，用于排查 pushImage 问题）──
-void drawHanziPixel(int16_t x, int16_t y, uint16_t fg, uint16_t bg) {
-  for (uint8_t row = 0; row < 16; row++) {
-    uint8_t b0 = fontBuf[row * 2];
-    uint8_t b1 = fontBuf[row * 2 + 1];
-    for (uint8_t col = 0; col < 8; col++) {
-      tft.drawPixel(x + col,     y + row, (b0 & (0x80 >> col)) ? fg : bg);
-      tft.drawPixel(x + 8 + col, y + row, (b1 & (0x80 >> col)) ? fg : bg);
-    }
-  }
 }
 
 // ── 显示 GB2312 字符串（\xHH 转义，支持 ASCII 混排和 \n）────────
@@ -141,29 +129,20 @@ void setup() {
   while (!Serial && millis() - t0 < 5000) delay(10);
   Serial.println("\n===== TFT_eSPI 汉字显示（硬件SPI共享总线）=====");
 
-  // // 字库 CS 初始化（默认高电平 = 未选中）
-  // pinMode(FONT_CS, OUTPUT);
-  // digitalWrite(FONT_CS, HIGH);
+  // 字库 CS 初始化（默认高电平 = 未选中）
+  pinMode(FONT_CS, OUTPUT);
+  digitalWrite(FONT_CS, HIGH);
 
   // ── 显式初始化硬件 SPI（FSPI）────────────────────────────
   // 必须先于 tft.init() 调用！确保 GPIO11/12/13 配置为 SPI 功能，
   // 特别是 GPIO13(MISO) 必须配置为输入，否则字库数据无法回读。
-  // TFT_eSPI 和字库读取共用此 SPI 实例。
-  // SPI.begin();
+  SPI.begin();
 
   // ── TFT_eSPI 初始化 ────────────────────────────────────
   // 内部也会调用 SPI.begin()，但 SPI 已初始化则跳过重复配置
   tft.init();
   tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
-
-  // ── 诊断：打印 TFT_eSPI 配置信息 ────────────────────────
-  Serial.println("\n[DIAG] TFT_eSPI 配置信息:");
-  Serial.printf("[DIAG] 驱动: %s\n", tft.getSetup().version);
-  Serial.printf("[DIAG] 屏幕尺寸: %dx%d\n", tft.width(), tft.height());
-  Serial.printf("[DIAG] SPI 频率: %d Hz\n", tft.getSetup().freq);
-  Serial.println("[DIAG] 如果驱动显示 ILI9341 而不是 ST7789，");
-  Serial.println("[DIAG] 说明 User_Setup.h 没有正确复制到库目录！");
 
   Serial.println("[INIT] TFT_eSPI 初始化完成");
 
